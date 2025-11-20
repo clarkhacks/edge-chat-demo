@@ -394,7 +394,6 @@ export class ChatRoom {
 
       // Save message.
       let key = new Date(data.timestamp).toISOString();
-      await this.storage.put(key, dataStr);
     } catch (err) {
       // Report any exceptions directly back to the client. As with our handleErrors() this
       // probably isn't what you'd want to do in production, but it's convenient when testing.

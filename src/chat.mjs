@@ -25,17 +25,19 @@ async function handleErrors(request, func) {
 export default {
   async fetch(request, env) {
     return await handleErrors(request, async () => {
-
       let url = new URL(request.url);
       let path = url.pathname.slice(1).split('/');
 
       if (!path[0]) {
-        return new Response(HTML, { headers: { "Content-Type": "text/html;charset=UTF-8" } });
+        return new Response(HTML, {
+          headers: { "Content-Type": "text/html;charset=UTF-8" }
+        });
       }
 
       switch (path[0]) {
         case "api":
           return handleApiRequest(path.slice(1), request, env);
+
         default:
           return new Response("Not found", { status: 404 });
       }
@@ -49,11 +51,12 @@ export default {
 async function handleApiRequest(path, request, env) {
   switch (path[0]) {
     case "room": {
-
       if (!path[1]) {
         if (request.method == "POST") {
           let id = env.rooms.newUniqueId();
-          return new Response(id.toString(), { headers: { "Access-Control-Allow-Origin": "*" } });
+          return new Response(id.toString(), {
+            headers: { "Access-Control-Allow-Origin": "*" }
+          });
         } else {
           return new Response("Method not allowed", { status: 405 });
         }
@@ -110,7 +113,7 @@ export class ChatRoom {
     });
 
     /* ---------------------------
-       LOAD PROFANITY LIST SAFELY
+       LOAD PROFANITY LIST + FIX
     --------------------------- */
     this.profanityPatterns = [];
 
@@ -119,11 +122,24 @@ export class ChatRoom {
     )
       .then(res => res.json())
       .then(list => {
-        this.profanityPatterns = list.map(item =>
-          typeof item === "string"
-            ? new RegExp(item, "i")
-            : new RegExp(item.match, "i")
-        );
+        this.profanityPatterns = list.map(entry => {
+          const pattern = entry.match;
+
+          // Escape regex syntax except pipes (|)
+          const escaped = pattern
+            .split("|")
+            .map(p =>
+              p.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+            )
+            .join("|");
+
+          const hasSpace = pattern.includes(" ");
+          const finalRegex = hasSpace
+            ? new RegExp(`(${escaped})`, "gi")
+            : new RegExp(`\\b(${escaped})\\b`, "gi");
+
+          return { regex: finalRegex };
+        });
       })
       .catch(err => {
         console.error("Failed to load profanity list", err);
@@ -140,17 +156,18 @@ export class ChatRoom {
 
       switch (url.pathname) {
         case "/websocket": {
-
           if (request.headers.get("Upgrade") !== "websocket") {
             return new Response("expected websocket", { status: 400 });
           }
 
           let ip = request.headers.get("CF-Connecting-IP");
-
           let pair = new WebSocketPair();
           await this.handleSession(pair[1], ip);
 
-          return new Response(null, { status: 101, webSocket: pair[0] });
+          return new Response(null, {
+            status: 101,
+            webSocket: pair[0]
+          });
         }
 
         default:
@@ -163,14 +180,24 @@ export class ChatRoom {
      PROFANITY CHECK
   ------------------------------------------------------- */
   containsProfanity(message) {
-    return this.profanityPatterns.some(regex => regex.test(message));
+    return this.profanityPatterns.some(p => p.regex.test(message));
+  }
+
+  /* -------------------------------------------------------
+     SANITIZE MESSAGE (asterisks)
+  ------------------------------------------------------- */
+  sanitizeMessage(message) {
+    let sanitized = message;
+    for (const { regex } of this.profanityPatterns) {
+      sanitized = sanitized.replace(regex, match => "*".repeat(match.length));
+    }
+    return sanitized;
   }
 
   /* -------------------------------------------------------
      SESSION HANDLER
   ------------------------------------------------------- */
   async handleSession(webSocket, ip) {
-
     this.state.acceptWebSocket(webSocket);
 
     let limiterId = this.env.limiters.idFromName(ip);
@@ -186,16 +213,16 @@ export class ChatRoom {
 
     for (let otherSession of this.sessions.values()) {
       if (otherSession.name) {
-        session.blockedMessages.push(JSON.stringify({ joined: otherSession.name }));
+        session.blockedMessages.push(
+          JSON.stringify({ joined: otherSession.name })
+        );
       }
     }
 
     let storage = await this.storage.list({ reverse: true, limit: 100 });
     let backlog = [...storage.values()];
     backlog.reverse();
-    backlog.forEach(value => {
-      session.blockedMessages.push(value);
-    });
+    backlog.forEach(value => session.blockedMessages.push(value));
   }
 
   /* -------------------------------------------------------
@@ -218,7 +245,7 @@ export class ChatRoom {
 
       let data = JSON.parse(msg);
 
-      /* ------ FIRST MESSAGE = NAME ------ */
+      /* FIRST MESSAGE = NAME */
       if (!session.name) {
         session.name = "" + (data.name || "anonymous");
         webSocket.serializeAttachment({ name: session.name });
@@ -237,14 +264,14 @@ export class ChatRoom {
         return;
       }
 
-      /* ------ WAIT FOR PROFANITY LIST ------ */
+      /* WAIT FOR PROFANITY LIST */
       await this.profanityReady;
 
-      /* ------ SANITIZE MESSAGE ------ */
+      /* SANITIZE MESSAGE */
       data = { name: session.name, message: "" + data.message };
 
       if (this.containsProfanity(data.message)) {
-        data.message = "Inappropriate Message";
+        data.message = this.sanitizeMessage(data.message);
       }
 
       if (data.message.length > 256) {
@@ -268,29 +295,21 @@ export class ChatRoom {
 
   /* -------------------------------------------------------
      CLOSE / ERROR HANDLERS
-  ------------------------------------------------------- */
+------------------------------------------------------- */
   async closeOrErrorHandler(webSocket) {
     let session = this.sessions.get(webSocket) || {};
     session.quit = true;
     this.sessions.delete(webSocket);
-    if (session.name) {
-      this.broadcast({ quit: session.name });
-    }
+    if (session.name) this.broadcast({ quit: session.name });
   }
 
-  async webSocketClose(webSocket) {
-    this.closeOrErrorHandler(webSocket);
-  }
-
-  async webSocketError(webSocket) {
-    this.closeOrErrorHandler(webSocket);
-  }
+  async webSocketClose(webSocket) { this.closeOrErrorHandler(webSocket); }
+  async webSocketError(webSocket) { this.closeOrErrorHandler(webSocket); }
 
   /* -------------------------------------------------------
      BROADCAST
   ------------------------------------------------------- */
   broadcast(message) {
-
     if (typeof message !== "string") {
       message = JSON.stringify(message);
     }
@@ -298,9 +317,8 @@ export class ChatRoom {
     let quitters = [];
     this.sessions.forEach((session, webSocket) => {
       if (session.name) {
-        try {
-          webSocket.send(message);
-        } catch (err) {
+        try { webSocket.send(message); }
+        catch (err) {
           session.quit = true;
           quitters.push(session);
           this.sessions.delete(webSocket);
@@ -311,9 +329,7 @@ export class ChatRoom {
     });
 
     quitters.forEach(quitter => {
-      if (quitter.name) {
-        this.broadcast({ quit: quitter.name });
-      }
+      if (quitter.name) this.broadcast({ quit: quitter.name });
     });
   }
 }
@@ -346,7 +362,6 @@ export class RateLimiter {
    RATE LIMITER CLIENT
 ------------------------------------------------------- */
 class RateLimiterClient {
-
   constructor(getLimiterStub, reportError) {
     this.getLimiterStub = getLimiterStub;
     this.reportError = reportError;

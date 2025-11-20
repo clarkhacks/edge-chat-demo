@@ -286,7 +286,7 @@ export class ChatRoom {
       this.broadcast(dataStr);
 
       let key = new Date(data.timestamp).toISOString();
-      await this.storage.put(key, dataStr);
+      // await this.storage.put(key, dataStr); don't store messages
 
     } catch (err) {
       webSocket.send(JSON.stringify({ error: err.stack }));

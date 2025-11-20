@@ -244,7 +244,15 @@ export class ChatRoom {
     // no need to store this to disk since we assume if the object is destroyed and recreated, much
     // more than a millisecond will have gone by.
     this.lastTimestamp = 0;
-  }
+     this.profanityPatterns = [];
+    fetch('https://raw.githubusercontent.com/dsojevic/profanity-list/refs/heads/main/en.json')
+      .then(res => res.json())
+      .then(list => {
+        // Convert each `match` string into a regex
+        this.profanityPatterns = list.map(item => new RegExp(item.match, 'i'));
+      })
+      .catch(err => console.error('Failed to load profanity list', err));
+  
 
   // The system will call fetch() whenever an HTTP request is sent to this Object. Such requests
   // can only be sent from other Worker code, such as the code above; these requests don't come
@@ -284,7 +292,10 @@ export class ChatRoom {
       }
     });
   }
-
+ containsProfanity(message) {
+    if (!this.profanityPatterns) return false;
+    return this.profanityPatterns.some(regex => regex.test(message));
+  }
   // handleSession() implements our WebSocket-based chat protocol.
   async handleSession(webSocket, ip) {
     // Accept our end of the WebSocket. This tells the runtime that we'll be terminating the
@@ -374,7 +385,10 @@ export class ChatRoom {
 
       // Construct sanitized message for storage and broadcast.
       data = { name: session.name, message: "" + data.message };
-
+// Check for profanity
+      if (this.containsProfanity(data.message)) {
+        data.message = "Inappropriate Message";
+      }
       // Block people from sending overly long messages. This is also enforced on the client,
       // so to trigger this the user must be bypassing the client code.
       if (data.message.length > 256) {
